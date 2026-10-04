@@ -255,7 +255,10 @@ driver selects a backend from compositor capabilities:
   When those seats are present together with wlr foreign-toplevel and virtual
   pointer support, cua-driver treats native Wayland raw input as focus-free:
   `delivery_mode:"background"` targets the agent seat without changing the
-  user's physical pointer or layout focus. niri keeps these seats opt-in;
+  user's physical pointer or layout focus. Target-bound virtual-pointer sessions
+  are deterministically sharded across the advertised Agent seats by
+  `window_id`, so simultaneous work on different windows gets independent
+  pointer position/focus lanes. niri keeps these seats opt-in;
   start the compatible compositor with `NIRI_AGENT_SEATS=2` (or another
   value from 1..8) and enable this backend with
   `CUA_DRIVER_RS_ENABLE_WAYLAND=1`.
