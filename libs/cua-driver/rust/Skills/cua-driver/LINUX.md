@@ -251,6 +251,14 @@ driver selects a backend from compositor capabilities:
 
 - Sway and other wlroots compositors use foreign-toplevel discovery,
   wlr-screencopy, virtual pointer, and virtual keyboard protocols.
+- niri can expose compositor-owned isolated agent seats named `niri-agent-*`.
+  When those seats are present together with wlr foreign-toplevel and virtual
+  pointer support, cua-driver treats native Wayland raw input as focus-free:
+  `delivery_mode:"background"` targets the agent seat without changing the
+  user's physical pointer or layout focus. niri keeps these seats opt-in;
+  start the compatible compositor with `NIRI_AGENT_SEATS=2` (or another
+  value from 1..8) and enable this backend with
+  `CUA_DRIVER_RS_ENABLE_WAYLAND=1`.
 - Hyprland has separate discovery and capture adapters. Its optional plugin
   defaults to discovery-only; the opt-in input v3 source candidate has the
   qualification and validation limits below. Do not inherit Sway coverage.
@@ -269,9 +277,12 @@ installed helpers, and portal grant.
 Standard Wayland has no general client protocol for raw input to an arbitrary
 occluded surface. Background AX actions can still deliver through AT-SPI, and
 a PX left click can deliver when hit-testing resolves to an actionable AT-SPI
-control. Other focus-bound background pointer and keyboard shapes return an
-exact `background_unavailable` result. They do not report success after a
-silent drop.
+control. niri's named agent-seat contract is an explicit compositor-owned
+exception: the driver requires `niri-agent-*` plus the matching wlroots
+protocols before admitting raw background pointer or keyboard delivery. Other
+focus-bound background pointer and keyboard shapes return an exact
+`background_unavailable` result. They do not report success after a silent
+drop.
 
 Outside an explicitly enabled, qualified compositor-owned background route,
 raw Wayland input requires explicitly authorized `delivery_mode:"foreground"`.
