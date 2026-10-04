@@ -1490,9 +1490,12 @@ pub fn open_vptr_session(activate_window_id: Option<u64>) -> anyhow::Result<Vptr
         anyhow::bail!("compositor does not expose zwlr_foreign_toplevel_manager_v1");
     }
 
-    let seat = state.seats.selected().ok_or_else(|| {
-        anyhow::anyhow!("compositor exposed no wl_seat for virtual-pointer input")
-    })?;
+    let seat = activate_window_id
+        .and_then(|window_id| state.seats.niri_agent_for_key(window_id))
+        .or_else(|| state.seats.selected())
+        .ok_or_else(|| {
+            anyhow::anyhow!("compositor exposed no wl_seat for virtual-pointer input")
+        })?;
 
     if let Some(id) = activate_window_id {
         let handle = matching_handle(&state, id)
