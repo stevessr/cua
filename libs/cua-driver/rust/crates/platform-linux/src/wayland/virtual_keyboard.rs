@@ -104,6 +104,27 @@ impl Dispatch<ZwpVirtualKeyboardV1, ()> for State {
     }
 }
 
+pub(super) fn isolated_agent_available() -> bool {
+    let Ok(conn) = Connection::connect_to_env() else {
+        return false;
+    };
+    let mut queue = conn.new_event_queue::<State>();
+    let qh = queue.handle();
+    conn.display().get_registry(&qh, ());
+    let mut state = State::default();
+
+    if queue.roundtrip(&mut state).is_err() {
+        return false;
+    }
+    for _ in 0..2 {
+        if queue.roundtrip(&mut state).is_err() {
+            return false;
+        }
+    }
+
+    state.manager.is_some() && state.seats.niri_agent().is_some()
+}
+
 pub(super) fn hotkey(modifiers: &[String], key: &str) -> anyhow::Result<()> {
     let transitions = hotkey_transitions(modifiers, key)?;
     let conn = Connection::connect_to_env()?;
