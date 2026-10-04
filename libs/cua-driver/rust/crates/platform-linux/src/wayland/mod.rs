@@ -165,6 +165,7 @@ fn probe_isolated_agent_input() -> bool {
     state.manager.is_some()
         && state.vptr_manager.is_some()
         && state.seats.niri_agent().is_some()
+        && virtual_keyboard::isolated_agent_available()
 }
 
 /// Whether this compositor exposes niri's independent background-agent seat
