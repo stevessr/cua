@@ -6886,16 +6886,24 @@ impl Tool for ClickTool {
                     crate::wayland::inject_click(pid, xid, x, y, count as u32, button)?;
                     return Ok(("wayland_cua_compositor", None, None, None));
                 }
-                if !delivery.is_foreground() {
+                if !delivery.is_foreground()
+                    && !crate::wayland::isolated_agent_input_available()
+                {
                     return Ok(("background_unavailable", None, None, None));
                 }
-                // Native Wayland: focus+raise the target toplevel
-                // (foreign-toplevel `activate`), then drive `count` virtual-pointer
-                // button events. Wayland injection routes to the compositor focus.
+                // On niri, with_target_foreground binds only the independent
+                // agent seat; on focus-based compositors it retains the normal
+                // explicit foreground activation contract.
+                let isolated = crate::wayland::isolated_agent_input_available();
                 crate::wayland::with_target_foreground(pid, xid, || {
                     crate::wayland::click_focused(output_x, output_y, count as u32, button)
                 })?;
-                return Ok(("wayland_activate", None, None, None));
+                return Ok((
+                    if isolated { "wayland_agent_seat" } else { "wayland_activate" },
+                    None,
+                    None,
+                    None,
+                ));
             }
             // X11 injection. Tiered no-focus-steal delivery (background):
             //   1. Plain left single-click → AT-SPI doAction at that point.
@@ -7523,7 +7531,7 @@ impl Tool for TypeTextTool {
         // emitting the DOM input event. For an explicit foreground request on
         // native Wayland, focus the named field and send real keyboard input so
         // Chromium/WebKit observe the same event sequence as a user.
-        if delivery.is_foreground()
+        if (delivery.is_foreground() || crate::wayland::isolated_agent_input_available())
             && crate::wayland::wayland_input_enabled()
             && (is_chromium_embedder(pid) || is_webkitgtk_embedder(pid))
         {
@@ -7576,7 +7584,9 @@ impl Tool for TypeTextTool {
                     .await;
                 }
                 Ok(Err(_)) | Err(_)
-                    if !delivery.is_foreground() && crate::wayland::wayland_input_enabled() =>
+                    if !delivery.is_foreground()
+                        && crate::wayland::wayland_input_enabled()
+                        && !crate::wayland::isolated_agent_input_available() =>
                 {
                     return crate::input::delivery::background_unavailable_error(
                         crate::input::delivery::BackgroundUnavailable::FocusedInputOnly,
@@ -7590,7 +7600,7 @@ impl Tool for TypeTextTool {
         // targeting in the protocol). Type via the virtual-keyboard tool; pair
         // with a prior `click`/`activate` to focus the intended window.
         if crate::wayland::wayland_input_enabled() {
-            if !delivery.is_foreground() {
+            if !delivery.is_foreground() && !crate::wayland::isolated_agent_input_available() {
                 return crate::input::delivery::background_unavailable_error(
                     crate::input::delivery::BackgroundUnavailable::FocusedInputOnly,
                 );
