@@ -9639,11 +9639,16 @@ impl Tool for ScrollTool {
                 crate::wayland::scroll_at(xid, output_point, &direction_for_wayland, amount as u32)
             })
             .await;
+            let mode_label = if delivery.is_foreground() {
+                "foreground"
+            } else {
+                "background"
+            };
             return match result {
                 Ok(Ok(())) => ToolResult::text(format!(
-                    "Scrolled {direction} {amount} ticks (delivery_mode=foreground)."
+                    "Scrolled {direction} {amount} ticks (delivery_mode={mode_label})."
                 ))
-                .with_structured(json!({ "verified": false, "delivery_mode": "foreground" })),
+                .with_structured(json!({ "verified": false, "delivery_mode": mode_label })),
                 Ok(Err(error)) => ToolResult::error(error.to_string()),
                 Err(error) => ToolResult::error(format!("Task error: {error}")),
             };
