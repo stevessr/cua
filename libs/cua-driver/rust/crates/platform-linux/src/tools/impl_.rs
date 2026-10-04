@@ -2943,6 +2943,10 @@ fn is_gtk_process(pid: u32) -> bool {
         .unwrap_or(false)
 }
 
+fn focus_free_native_wayland_available() -> bool {
+    crate::wayland::wayland_input_enabled() && crate::wayland::isolated_agent_input_available()
+}
+
 fn unavailable_webkit_background(
     pid: u32,
     delivery: crate::input::delivery::DeliveryMode,
@@ -2950,6 +2954,7 @@ fn unavailable_webkit_background(
     (!delivery.is_foreground()
         && is_webkitgtk_embedder(pid)
         && !crate::wayland::is_inject_mode()
+        && !focus_free_native_wayland_available()
         && !crate::input::real_pointer_input_available())
     .then(|| {
         crate::input::delivery::background_unavailable_error(
@@ -2962,7 +2967,10 @@ fn unavailable_webkit_keyboard_background(
     pid: u32,
     delivery: crate::input::delivery::DeliveryMode,
 ) -> Option<ToolResult> {
-    (!delivery.is_foreground() && is_webkitgtk_embedder(pid) && !crate::wayland::is_inject_mode())
+    (!delivery.is_foreground()
+        && is_webkitgtk_embedder(pid)
+        && !crate::wayland::is_inject_mode()
+        && !focus_free_native_wayland_available())
         .then(|| {
             crate::input::delivery::background_unavailable_error(
                 crate::input::delivery::BackgroundUnavailable::FocusedInputOnly,
@@ -3012,6 +3020,7 @@ fn unavailable_gtk_keyboard_background(
     (!delivery.is_foreground()
         && is_gtk_process(pid)
         && !crate::wayland::is_inject_mode()
+        && !focus_free_native_wayland_available()
         && !crate::input::real_keyboard_input_available())
     .then(background_keyboard_refusal)
 }
@@ -3306,6 +3315,7 @@ fn unavailable_gtk_pointer_background(
     (!delivery.is_foreground()
         && is_gtk_process(pid)
         && !crate::wayland::is_inject_mode()
+        && !focus_free_native_wayland_available()
         && !crate::input::real_pointer_input_available())
     .then(|| {
         crate::input::delivery::background_unavailable_error(
@@ -3320,6 +3330,7 @@ fn unavailable_wayland_focused_input_background(
 ) -> Option<ToolResult> {
     (crate::wayland::wayland_input_enabled()
         && !(focus_free_inject_supported && crate::wayland::is_inject_mode())
+        && !crate::wayland::isolated_agent_input_available()
         && !delivery.is_foreground())
     .then(|| {
         crate::input::delivery::background_unavailable_error(
@@ -3382,8 +3393,9 @@ fn unavailable_chromium_background(
     // Chromium is an XInput2 client: real (non-synthetic) events from the MPX
     // virtual master pointer/keyboard reach its renderer like the private
     // compositor's do, so only the synthetic-XSendEvent-only host must refuse.
-    let focus_free_real_input =
-        crate::wayland::is_inject_mode() || crate::input::real_pointer_input_available();
+    let focus_free_real_input = crate::wayland::is_inject_mode()
+        || focus_free_native_wayland_available()
+        || crate::input::real_pointer_input_available();
     if chromium_background_must_refuse(delivery.is_foreground(), focus_free_real_input, true) {
         Some(crate::input::delivery::background_unavailable_error(
             crate::input::delivery::BackgroundUnavailable::ChromiumInput,
