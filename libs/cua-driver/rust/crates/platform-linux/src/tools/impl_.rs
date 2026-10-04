@@ -6906,7 +6906,11 @@ impl Tool for ClickTool {
                     })?;
                 }
                 return Ok((
-                    if isolated { "wayland_agent_seat" } else { "wayland_activate" },
+                    if isolated {
+                        "wayland_agent_seat"
+                    } else {
+                        "wayland_activate"
+                    },
                     None,
                     None,
                     None,
