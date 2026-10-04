@@ -6895,9 +6895,16 @@ impl Tool for ClickTool {
                 // agent seat; on focus-based compositors it retains the normal
                 // explicit foreground activation contract.
                 let isolated = crate::wayland::isolated_agent_input_available();
-                crate::wayland::with_target_foreground(pid, xid, || {
-                    crate::wayland::click_focused(output_x, output_y, count as u32, button)
-                })?;
+                if isolated {
+                    // niri scopes pointer target binding to the concrete
+                    // client-side wl_seat resource. Keep activation and virtual
+                    // pointer creation in one Wayland connection.
+                    crate::wayland::click(xid, output_x, output_y, count as u32, button)?;
+                } else {
+                    crate::wayland::with_target_foreground(pid, xid, || {
+                        crate::wayland::click_focused(output_x, output_y, count as u32, button)
+                    })?;
+                }
                 return Ok((
                     if isolated { "wayland_agent_seat" } else { "wayland_activate" },
                     None,
