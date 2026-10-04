@@ -2943,6 +2943,10 @@ fn is_gtk_process(pid: u32) -> bool {
         .unwrap_or(false)
 }
 
+fn focus_free_native_wayland_available() -> bool {
+    crate::wayland::wayland_input_enabled() && crate::wayland::isolated_agent_input_available()
+}
+
 fn unavailable_webkit_background(
     pid: u32,
     delivery: crate::input::delivery::DeliveryMode,
@@ -2950,6 +2954,7 @@ fn unavailable_webkit_background(
     (!delivery.is_foreground()
         && is_webkitgtk_embedder(pid)
         && !crate::wayland::is_inject_mode()
+        && !focus_free_native_wayland_available()
         && !crate::input::real_pointer_input_available())
     .then(|| {
         crate::input::delivery::background_unavailable_error(
@@ -2962,7 +2967,10 @@ fn unavailable_webkit_keyboard_background(
     pid: u32,
     delivery: crate::input::delivery::DeliveryMode,
 ) -> Option<ToolResult> {
-    (!delivery.is_foreground() && is_webkitgtk_embedder(pid) && !crate::wayland::is_inject_mode())
+    (!delivery.is_foreground()
+        && is_webkitgtk_embedder(pid)
+        && !crate::wayland::is_inject_mode()
+        && !focus_free_native_wayland_available())
         .then(|| {
             crate::input::delivery::background_unavailable_error(
                 crate::input::delivery::BackgroundUnavailable::FocusedInputOnly,
@@ -3012,6 +3020,7 @@ fn unavailable_gtk_keyboard_background(
     (!delivery.is_foreground()
         && is_gtk_process(pid)
         && !crate::wayland::is_inject_mode()
+        && !focus_free_native_wayland_available()
         && !crate::input::real_keyboard_input_available())
     .then(background_keyboard_refusal)
 }
@@ -3306,6 +3315,7 @@ fn unavailable_gtk_pointer_background(
     (!delivery.is_foreground()
         && is_gtk_process(pid)
         && !crate::wayland::is_inject_mode()
+        && !focus_free_native_wayland_available()
         && !crate::input::real_pointer_input_available())
     .then(|| {
         crate::input::delivery::background_unavailable_error(
@@ -3320,6 +3330,7 @@ fn unavailable_wayland_focused_input_background(
 ) -> Option<ToolResult> {
     (crate::wayland::wayland_input_enabled()
         && !(focus_free_inject_supported && crate::wayland::is_inject_mode())
+        && !crate::wayland::isolated_agent_input_available()
         && !delivery.is_foreground())
     .then(|| {
         crate::input::delivery::background_unavailable_error(
@@ -3382,8 +3393,9 @@ fn unavailable_chromium_background(
     // Chromium is an XInput2 client: real (non-synthetic) events from the MPX
     // virtual master pointer/keyboard reach its renderer like the private
     // compositor's do, so only the synthetic-XSendEvent-only host must refuse.
-    let focus_free_real_input =
-        crate::wayland::is_inject_mode() || crate::input::real_pointer_input_available();
+    let focus_free_real_input = crate::wayland::is_inject_mode()
+        || focus_free_native_wayland_available()
+        || crate::input::real_pointer_input_available();
     if chromium_background_must_refuse(delivery.is_foreground(), focus_free_real_input, true) {
         Some(crate::input::delivery::background_unavailable_error(
             crate::input::delivery::BackgroundUnavailable::ChromiumInput,
@@ -6874,16 +6886,35 @@ impl Tool for ClickTool {
                     crate::wayland::inject_click(pid, xid, x, y, count as u32, button)?;
                     return Ok(("wayland_cua_compositor", None, None, None));
                 }
-                if !delivery.is_foreground() {
+                if !delivery.is_foreground()
+                    && !crate::wayland::isolated_agent_input_available()
+                {
                     return Ok(("background_unavailable", None, None, None));
                 }
-                // Native Wayland: focus+raise the target toplevel
-                // (foreign-toplevel `activate`), then drive `count` virtual-pointer
-                // button events. Wayland injection routes to the compositor focus.
-                crate::wayland::with_target_foreground(pid, xid, || {
-                    crate::wayland::click_focused(output_x, output_y, count as u32, button)
-                })?;
-                return Ok(("wayland_activate", None, None, None));
+                // On niri, with_target_foreground binds only the independent
+                // agent seat; on focus-based compositors it retains the normal
+                // explicit foreground activation contract.
+                let isolated = crate::wayland::isolated_agent_input_available();
+                if isolated {
+                    // niri scopes pointer target binding to the concrete
+                    // client-side wl_seat resource. Keep activation and virtual
+                    // pointer creation in one Wayland connection.
+                    crate::wayland::click(xid, output_x, output_y, count as u32, button)?;
+                } else {
+                    crate::wayland::with_target_foreground(pid, xid, || {
+                        crate::wayland::click_focused(output_x, output_y, count as u32, button)
+                    })?;
+                }
+                return Ok((
+                    if isolated {
+                        "wayland_agent_seat"
+                    } else {
+                        "wayland_activate"
+                    },
+                    None,
+                    None,
+                    None,
+                ));
             }
             // X11 injection. Tiered no-focus-steal delivery (background):
             //   1. Plain left single-click → AT-SPI doAction at that point.
@@ -7511,7 +7542,7 @@ impl Tool for TypeTextTool {
         // emitting the DOM input event. For an explicit foreground request on
         // native Wayland, focus the named field and send real keyboard input so
         // Chromium/WebKit observe the same event sequence as a user.
-        if delivery.is_foreground()
+        if (delivery.is_foreground() || crate::wayland::isolated_agent_input_available())
             && crate::wayland::wayland_input_enabled()
             && (is_chromium_embedder(pid) || is_webkitgtk_embedder(pid))
         {
@@ -7564,7 +7595,9 @@ impl Tool for TypeTextTool {
                     .await;
                 }
                 Ok(Err(_)) | Err(_)
-                    if !delivery.is_foreground() && crate::wayland::wayland_input_enabled() =>
+                    if !delivery.is_foreground()
+                        && crate::wayland::wayland_input_enabled()
+                        && !crate::wayland::isolated_agent_input_available() =>
                 {
                     return crate::input::delivery::background_unavailable_error(
                         crate::input::delivery::BackgroundUnavailable::FocusedInputOnly,
@@ -7578,7 +7611,7 @@ impl Tool for TypeTextTool {
         // targeting in the protocol). Type via the virtual-keyboard tool; pair
         // with a prior `click`/`activate` to focus the intended window.
         if crate::wayland::wayland_input_enabled() {
-            if !delivery.is_foreground() {
+            if !delivery.is_foreground() && !crate::wayland::isolated_agent_input_available() {
                 return crate::input::delivery::background_unavailable_error(
                     crate::input::delivery::BackgroundUnavailable::FocusedInputOnly,
                 );
@@ -9610,11 +9643,16 @@ impl Tool for ScrollTool {
                 crate::wayland::scroll_at(xid, output_point, &direction_for_wayland, amount as u32)
             })
             .await;
+            let mode_label = if delivery.is_foreground() {
+                "foreground"
+            } else {
+                "background"
+            };
             return match result {
                 Ok(Ok(())) => ToolResult::text(format!(
-                    "Scrolled {direction} {amount} ticks (delivery_mode=foreground)."
+                    "Scrolled {direction} {amount} ticks (delivery_mode={mode_label})."
                 ))
-                .with_structured(json!({ "verified": false, "delivery_mode": "foreground" })),
+                .with_structured(json!({ "verified": false, "delivery_mode": mode_label })),
                 Ok(Err(error)) => ToolResult::error(error.to_string()),
                 Err(error) => ToolResult::error(format!("Task error: {error}")),
             };

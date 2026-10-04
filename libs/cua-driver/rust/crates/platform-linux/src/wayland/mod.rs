@@ -142,6 +142,63 @@ pub fn wayland_input_enabled() -> bool {
     wayland_enabled() && std::env::var_os("WAYLAND_DISPLAY").is_some()
 }
 
+fn probe_isolated_agent_input() -> bool {
+    let Ok(conn) = Connection::connect_to_env() else {
+        return false;
+    };
+    let mut queue = conn.new_event_queue::<State>();
+    let qh = queue.handle();
+    conn.display().get_registry(&qh, ());
+
+    let mut state = State::default();
+    if queue.roundtrip(&mut state).is_err() {
+        return false;
+    }
+    // wl_seat names and protocol globals can arrive over subsequent
+    // roundtrips; mirror the mature input-session setup below.
+    for _ in 0..4 {
+        if queue.roundtrip(&mut state).is_err() {
+            return false;
+        }
+    }
+
+    state.manager.is_some()
+        && state.vptr_manager.is_some()
+        && state.seats.niri_agent().is_some()
+        && virtual_keyboard::isolated_agent_available()
+}
+
+/// Whether this compositor exposes niri's independent background-agent seat
+/// contract.
+///
+/// A generic wlroots compositor exposing virtual-pointer is not sufficient:
+/// background delivery is admitted only when the compositor also publishes a
+/// named `niri-agent-*` seat and wlr foreign-toplevel activation. This keeps
+/// Sway/labwc's focus-based input semantics unchanged.
+pub fn isolated_agent_input_available() -> bool {
+    if !wayland_input_enabled() {
+        return false;
+    }
+
+    let display = std::env::var("WAYLAND_DISPLAY").unwrap_or_default();
+    static CACHE: OnceLock<Mutex<Option<(String, bool)>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(None));
+
+    if let Ok(guard) = cache.lock() {
+        if let Some((cached_display, available)) = guard.as_ref() {
+            if cached_display == &display {
+                return *available;
+            }
+        }
+    }
+
+    let available = probe_isolated_agent_input();
+    if let Ok(mut guard) = cache.lock() {
+        *guard = Some((display, available));
+    }
+    available
+}
+
 /// Reason string when X11 input injection cannot possibly work, so callers
 /// **fail loudly** instead of falling through to an X11 path that no-ops yet
 /// reports success. Triggers only on a *pure* Wayland session — `WAYLAND_DISPLAY`
@@ -1433,9 +1490,12 @@ pub fn open_vptr_session(activate_window_id: Option<u64>) -> anyhow::Result<Vptr
         anyhow::bail!("compositor does not expose zwlr_foreign_toplevel_manager_v1");
     }
 
-    let seat = state.seats.selected().ok_or_else(|| {
-        anyhow::anyhow!("compositor exposed no wl_seat for virtual-pointer input")
-    })?;
+    let seat = activate_window_id
+        .and_then(|window_id| state.seats.niri_agent_for_key(window_id))
+        .or_else(|| state.seats.selected())
+        .ok_or_else(|| {
+            anyhow::anyhow!("compositor exposed no wl_seat for virtual-pointer input")
+        })?;
 
     if let Some(id) = activate_window_id {
         let handle = matching_handle(&state, id)
@@ -1554,6 +1614,14 @@ pub fn with_target_foreground<T>(
     body: impl FnOnce() -> anyhow::Result<T>,
 ) -> anyhow::Result<T> {
     let _target_guard = bind_foreground_target(pid, window_id);
+
+    // niri's named agent seat gives this connection its own keyboard focus.
+    // Activating the target therefore does not front the window or disturb the
+    // user's physical seat, and there is no primary focus state to restore.
+    if isolated_agent_input_available() {
+        activate_window_for_input_target(window_id, Some(pid))?;
+        return body();
+    }
     if let Some(window) = sway_ipc::window_for_id(window_id) {
         if window.pid != pid {
             anyhow::bail!(

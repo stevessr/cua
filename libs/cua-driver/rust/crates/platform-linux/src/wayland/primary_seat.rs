@@ -24,7 +24,46 @@ impl<T: Clone + PartialEq> Seats<T> {
         }
     }
 
+    pub(super) fn niri_agent(&self) -> Option<T> {
+        self.entries
+            .iter()
+            .rev()
+            .find(|entry| {
+                entry
+                    .1
+                    .as_deref()
+                    .is_some_and(|name| name.starts_with("niri-agent-"))
+            })
+            .map(|entry| entry.0.clone())
+    }
+
+    pub(super) fn niri_agent_for_key(&self, key: u64) -> Option<T> {
+        let agents = self
+            .entries
+            .iter()
+            .filter(|entry| {
+                entry
+                    .1
+                    .as_deref()
+                    .is_some_and(|name| name.starts_with("niri-agent-"))
+            })
+            .collect::<Vec<_>>();
+        if agents.is_empty() {
+            return None;
+        }
+
+        let idx = (key as usize) % agents.len();
+        Some(agents[idx].0.clone())
+    }
+
     pub(super) fn selected(&self) -> Option<T> {
+        // niri's agent seats are real isolated wl_seat lanes backed by
+        // compositor-side independent pointer/keyboard focus, so prefer one
+        // intentionally rather than depending on registry ordering.
+        if let Some(seat) = self.niri_agent() {
+            return Some(seat);
+        }
+
         self.entries
             .iter()
             .rev()
@@ -79,5 +118,24 @@ mod tests {
             seats.name(&id, name.into());
         }
         assert_eq!(seats.selected(), Some(1));
+    }
+
+    #[test]
+    fn niri_agent_seat_is_selected_intentionally() {
+        let mut seats = Seats::default();
+        for (id, name) in [
+            (1, "seat0"),
+            (2, "niri-agent-1"),
+            (3, "niri-agent-2"),
+        ] {
+            seats.add(id);
+            seats.name(&id, name.into());
+        }
+
+        assert_eq!(seats.niri_agent(), Some(3));
+        assert_eq!(seats.selected(), Some(3));
+        assert_eq!(seats.niri_agent_for_key(0), Some(2));
+        assert_eq!(seats.niri_agent_for_key(1), Some(3));
+        assert_eq!(seats.niri_agent_for_key(2), Some(2));
     }
 }
