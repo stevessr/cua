@@ -37,6 +37,25 @@ impl<T: Clone + PartialEq> Seats<T> {
             .map(|entry| entry.0.clone())
     }
 
+    pub(super) fn niri_agent_for_key(&self, key: u64) -> Option<T> {
+        let agents = self
+            .entries
+            .iter()
+            .filter(|entry| {
+                entry
+                    .1
+                    .as_deref()
+                    .is_some_and(|name| name.starts_with("niri-agent-"))
+            })
+            .collect::<Vec<_>>();
+        if agents.is_empty() {
+            return None;
+        }
+
+        let idx = (key as usize) % agents.len();
+        Some(agents[idx].0.clone())
+    }
+
     pub(super) fn selected(&self) -> Option<T> {
         // niri's agent seats are real isolated wl_seat lanes backed by
         // compositor-side independent pointer/keyboard focus, so prefer one
@@ -115,5 +134,8 @@ mod tests {
 
         assert_eq!(seats.niri_agent(), Some(3));
         assert_eq!(seats.selected(), Some(3));
+        assert_eq!(seats.niri_agent_for_key(0), Some(2));
+        assert_eq!(seats.niri_agent_for_key(1), Some(3));
+        assert_eq!(seats.niri_agent_for_key(2), Some(2));
     }
 }
